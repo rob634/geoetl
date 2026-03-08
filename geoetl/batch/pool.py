@@ -62,9 +62,15 @@ def parallel_map(
         len(items), config.max_workers,
     )
 
+    # Auto-tune chunksize: aim for ~4 chunks per worker for load balancing
+    chunksize = config.chunk_size
+    if chunksize == 1 and len(items) > config.max_workers * 4:
+        chunksize = max(1, len(items) // (config.max_workers * 4))
+        logger.debug("Auto-tuned chunksize to %d", chunksize)
+
     with ctx.Pool(processes=config.max_workers, initializer=_worker_init) as pool:
         results = list(tqdm(
-            pool.imap(func, items, chunksize=config.chunk_size),
+            pool.imap(func, items, chunksize=chunksize),
             total=len(items),
             desc=desc,
         ))

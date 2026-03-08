@@ -23,3 +23,7 @@ htmlcov/
 *.prj
 *.cpg
 geodata/
+
+# Data and output directories
+data/
+outputs/

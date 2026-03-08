@@ -39,6 +39,16 @@ class RasterInfo(BaseModel):
     errors: list[str] = []
 
 
+class CogMergeResult(BaseModel):
+    """Result of merging multiple rasters into a single COG."""
+
+    output_path: str
+    input_count: int
+    input_size_mb: float
+    output_size_mb: float
+    compression_ratio: float
+
+
 @dataclass
 class TileSpec:
     col_off: int

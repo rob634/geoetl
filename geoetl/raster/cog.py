@@ -1,6 +1,9 @@
-"""Cloud Optimized GeoTIFF creation via rio-cogeo."""
+"""Cloud Optimized GeoTIFF creation via rio-cogeo and GDAL CLI."""
 
 import logging
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +12,7 @@ from rio_cogeo.profiles import cog_profiles
 
 from geoetl.config import COGConfig, COGQuality, RasterType
 from geoetl.exceptions import COGCreationError
+from geoetl.raster.types import CogMergeResult
 from geoetl.raster.validation import validate_raster
 
 logger = logging.getLogger(__name__)
@@ -169,3 +173,84 @@ def create_cog(
 
     logger.info("COG created: %s (%.1f MB)", output_path.name, output_path.stat().st_size / (1024 * 1024))
     return output_path
+
+
+def create_cog_from_vrt(
+    input_paths: list[Path],
+    output_path: Path,
+    compression: str = "DEFLATE",
+    overview_resampling: str = "bilinear",
+    num_threads: int = 4,
+) -> CogMergeResult:
+    """Merge multiple rasters into a single COG via VRT intermediate.
+
+    Calls gdalbuildvrt then gdal_translate -of COG via subprocess.
+    Cleans up the intermediate VRT after completion.
+
+    Args:
+        input_paths: List of input raster paths to merge.
+        output_path: Path for the output COG.
+        compression: GDAL compression method (DEFLATE, LZW, ZSTD, etc.).
+        overview_resampling: Resampling method for overviews.
+        num_threads: Number of threads for gdal_translate.
+
+    Returns:
+        CogMergeResult with size and compression tracking.
+    """
+    for tool in ("gdalbuildvrt", "gdal_translate"):
+        if shutil.which(tool) is None:
+            raise COGCreationError(f"{tool} not found on PATH — install GDAL CLI tools")
+
+    if not input_paths:
+        raise COGCreationError("No input paths provided")
+
+    for p in input_paths:
+        if not Path(p).exists():
+            raise COGCreationError(f"Input file not found: {p}")
+
+    input_size_mb = sum(Path(p).stat().st_size for p in input_paths) / (1024 * 1024)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    vrt_fd, vrt_path = tempfile.mkstemp(suffix=".vrt", dir=output_path.parent)
+    try:
+        # Build VRT from input files
+        vrt_cmd = ["gdalbuildvrt", vrt_path] + [str(p) for p in input_paths]
+        logger.info("Building VRT from %d inputs", len(input_paths))
+        result = subprocess.run(vrt_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise COGCreationError(f"gdalbuildvrt failed: {result.stderr.strip()}")
+
+        # Translate VRT to COG
+        translate_cmd = [
+            "gdal_translate",
+            "-of", "COG",
+            "-co", f"COMPRESS={compression}",
+            "-co", f"OVERVIEW_RESAMPLING={overview_resampling}",
+            "-co", f"NUM_THREADS={num_threads}",
+            vrt_path,
+            str(output_path),
+        ]
+        logger.info("Creating COG: %s [%s]", output_path.name, compression)
+        result = subprocess.run(translate_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise COGCreationError(f"gdal_translate failed: {result.stderr.strip()}")
+
+    finally:
+        Path(vrt_path).unlink(missing_ok=True)
+
+    output_size_mb = output_path.stat().st_size / (1024 * 1024)
+    ratio = input_size_mb / output_size_mb if output_size_mb > 0 else 0.0
+
+    logger.info(
+        "COG merged: %s (%.1f MB -> %.1f MB, ratio %.1fx)",
+        output_path.name, input_size_mb, output_size_mb, ratio,
+    )
+
+    return CogMergeResult(
+        output_path=str(output_path),
+        input_count=len(input_paths),
+        input_size_mb=round(input_size_mb, 2),
+        output_size_mb=round(output_size_mb, 2),
+        compression_ratio=round(ratio, 2),
+    )

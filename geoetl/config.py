@@ -1,11 +1,17 @@
 """Configuration models and enums for geoetl."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
+
+
+def _default_workers() -> int:
+    """Default worker count: leave 2 cores free for OS/IO."""
+    return max(1, (os.cpu_count() or 4) - 2)
 
 
 class StorageTier(str, Enum):
@@ -45,8 +51,17 @@ class TilingConfig(BaseModel):
 
 
 class BatchConfig(BaseModel):
-    max_workers: int = Field(default=4, ge=1, le=32)
+    max_workers: int = Field(default_factory=_default_workers, ge=1, le=128)
     chunk_size: int = Field(default=1, ge=1)
+    zone_chunk_size: int = Field(default=5000, ge=100, description="Zones per worker chunk for inner parallelism")
+
+
+class PipelineConfig(BaseModel):
+    skip_existing: bool = False
+    dry_run: bool = False
+    checkpoint_path: Optional[Path] = None
+    log_path: Optional[Path] = None
+    status_interval: int = Field(default=50, ge=1)
 
 
 class GeoETLConfig(BaseSettings):
@@ -57,6 +72,7 @@ class GeoETLConfig(BaseSettings):
     cog: COGConfig = COGConfig()
     tiling: TilingConfig = TilingConfig()
     batch: BatchConfig = BatchConfig()
+    pipeline: PipelineConfig = PipelineConfig()
     log_level: str = "INFO"
 
     model_config = {"env_prefix": "GEOETL_"}

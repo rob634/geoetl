@@ -9,6 +9,7 @@ from pyproj import CRS
 
 from geoetl.config import RasterType
 from geoetl.exceptions import RasterValidationError
+from geoetl.raster._utils import nodata_mask as _nodata_mask
 from geoetl.raster.types import BandStats, CRSInfo, RasterInfo
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ def _compute_band_stats(src) -> list[BandStats]:
             data = src.read(i).astype(float)
             nodata = src.nodata
             if nodata is not None:
-                mask = data != nodata
+                mask = ~_nodata_mask(data, nodata)
                 null_count = int((~mask).sum())
                 valid = data[mask]
             else:
